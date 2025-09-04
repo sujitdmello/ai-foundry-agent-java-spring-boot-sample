@@ -226,8 +226,23 @@ public class AgentService {
         if (agentsClient != null) {
             logger.info("Cleaning up HTTP client resources...");
             try {
-                // The Azure SDK will handle cleanup automatically
-                // This is just a placeholder for any custom cleanup logic
+                // Clean up threads
+                if (threadsClient != null) {
+                    PagedIterable<PersistentAgentThread> threads = threadsClient.listThreads();
+                    for (PersistentAgentThread thread : threads) {
+                        threadsClient.deleteThread(thread.getId());
+                        logger.debug("Thread deleted: {}", thread.getId());
+                    }
+                }
+
+                // Clean up agents
+                if (administrationClient != null) {
+                    PagedIterable<PersistentAgent> agents = administrationClient.listAgents();
+                    for (PersistentAgent agent : agents) {
+                        administrationClient.deleteAgent(agent.getId());
+                        logger.debug("Agent deleted: {}", agent.getId());
+                    }
+                }
             } catch (Exception e) {
                 logger.warn("Error during cleanup: {}", e.getMessage());
             }
