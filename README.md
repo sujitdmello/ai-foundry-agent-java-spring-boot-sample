@@ -1,6 +1,6 @@
 # Azure AI Foundry Agent Demo
 
-A Spring Boot console application demonstrating how to create and interact with Azure AI Foundry agents using the Azure AI Agents SDK.
+A Spring Boot console application demonstrating how to create and interact with Azure AI Foundry agents using the Azure AI Agents SDK. THis sample specifically uses the CodeInterpreterTool which runs Python code as part of the Agent execution. The code generates a graph image in the output folder.
 
 ## Features
 
