@@ -11,14 +11,26 @@ import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.core.http.policy.HttpLogDetailLevel;
 import com.azure.core.http.policy.HttpLogOptions;
 import com.azure.core.http.rest.PagedIterable;
+import com.azure.core.util.BinaryData;
 import com.example.foundry.config.AgentConfiguration;
 import com.example.foundry.util.HttpLoggingInterceptor;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import java.util.Map;
+import java.util.ArrayList;
+import java.util.HashMap;
 
 import java.util.List;
+import java.util.function.Function;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.IOException;
 
 /**
  * Service class that handles Azure AI Foundry agent operations.
@@ -40,7 +52,8 @@ public class AgentService {
     private ThreadsClient threadsClient;
     private MessagesClient messagesClient;
     private RunsClient runsClient;
-    
+    private FunctionToolDefinition pythonCodeRunnerToolDefinition;
+
     @Autowired
     public AgentService(AgentConfiguration config) {
         this.config = config;
@@ -66,7 +79,7 @@ public class AgentService {
             PersistentAgentThread thread = createThread();
             
             // Send a message and get response
-            String message = "Hi, Agent! Draw a graph for a line with a slope of 4 and y-intercept of 9.";
+            String message = "Hi, Agent! Draw a graph for a line with a slope of 4 and y-intercept of 9 using Python code and run the code using the pythonCodeRunner tool.";
             sendMessageAndProcessResponse(agent, thread, message);
             
         } catch (Exception e) {
@@ -114,13 +127,58 @@ public class AgentService {
         logger.debug("Azure AI Agents client initialized successfully");
     }
     
+    private Function<String, String> pythonCodeRunner = code -> {
+        // Simulate code execution
+        logger.info("Executing Python code: {}", code); 
+        // Execute the python process with the code and return the output
+        ProcessBuilder processBuilder = new ProcessBuilder("python", "-c", code);
+        processBuilder.redirectErrorStream(true);
+        try {
+            Process process = processBuilder.start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            StringBuilder output = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+            process.waitFor();
+            return output.toString();
+        } catch (Exception e) {
+            logger.error("Error executing Python code: {}", e.getMessage(), e);
+            return "Error executing code";
+        }
+    };
+
     private PersistentAgent createAgent() {
         logger.debug("About to create agent...");
+
+        // Define the pythonCodeRunner tool
+        Map<String, Object> codeProperty = Map.of(
+            "type", "string",
+            "description", "The Python code to execute"
+        );
         
+        Map<String, Object> properties = Map.of("code", codeProperty);
+        
+        Map<String, Object> schema = Map.of(
+            "type", "object",
+            "properties", properties,
+            "required", new String[]{"code"}
+        );
+
+        pythonCodeRunnerToolDefinition = new FunctionToolDefinition(
+            new FunctionDefinition(
+                "pythonCodeRunner",
+                BinaryData.fromObject(schema)
+            ).setDescription("Execute Python code")
+        );
+        logger.info("Python runner tool definition created: {}", pythonCodeRunnerToolDefinition);
+
+        // Create the agent with the tool
         CreateAgentOptions options = new CreateAgentOptions(config.getModelDeploymentName())
                 .setName(config.getAgentName())
                 .setInstructions(config.getInstructions())
-                .setTools(List.of(new CodeInterpreterToolDefinition()));
+                .setTools(List.of(pythonCodeRunnerToolDefinition));
         
         PersistentAgent agent = administrationClient.createAgent(options);
         
@@ -133,7 +191,28 @@ public class AgentService {
         
         return agent;
     }
+
+    // Get the output of the Python code runner tool
+    private ToolOutput getPythonCodeRunnerOutput(RequiredToolCall toolCall){
+         if (toolCall instanceof RequiredFunctionToolCall) {
+                RequiredFunctionToolCall functionToolCall = (RequiredFunctionToolCall) toolCall;
+                String functionName = functionToolCall.getFunction().getName();
+                if (functionName.equals("pythonCodeRunner")) {
+                    String arguments = functionToolCall.getFunction().getArguments();
+                    try {
+                        JsonNode root = new JsonMapper().readTree(arguments);
+                        String code = String.valueOf(root.get("code").asText());
+                        return new ToolOutput().setToolCallId(functionToolCall.getId())
+                            .setOutput(pythonCodeRunner.apply(code));
+                    } catch (JsonProcessingException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+            return null;
+        }
     
+
     private PersistentAgentThread createThread() {
         PersistentAgentThread thread = threadsClient.createThread();
         logger.info("Thread created successfully: {}", thread.getId());
@@ -196,6 +275,16 @@ public class AgentService {
             if (attemptCount >= maxAttempts) {
                 throw new RuntimeException("Run did not complete within the expected time. Status: " + status);
             }
+            // Handle required actions (e.g., tool calls) - this is key to getting the response from the Python tool
+            if (run.getStatus() == RunStatus.REQUIRES_ACTION
+                    && run.getRequiredAction() instanceof SubmitToolOutputsAction) {
+                    SubmitToolOutputsAction submitToolsOutputAction = (SubmitToolOutputsAction) (run.getRequiredAction());
+                    ArrayList<ToolOutput> toolOutputs = new ArrayList<ToolOutput>();
+                    for (RequiredToolCall toolCall : submitToolsOutputAction.getSubmitToolOutputs().getToolCalls()) {
+                        toolOutputs.add(getPythonCodeRunnerOutput(toolCall));
+                    }
+                    run = runsClient.submitToolOutputsToRun(threadId, runId, toolOutputs);
+                }            
             
         } while (run.getStatus() == RunStatus.QUEUED || 
                  run.getStatus() == RunStatus.IN_PROGRESS || 
