@@ -152,6 +152,7 @@ public class AgentService {
     private PersistentAgent createAgent() {
         logger.debug("About to create agent...");
 
+        // Define the pythonCodeRunner tool
         Map<String, Object> codeProperty = Map.of(
             "type", "string",
             "description", "The Python code to execute"
@@ -173,6 +174,7 @@ public class AgentService {
         );
         logger.info("Python runner tool definition created: {}", pythonCodeRunnerToolDefinition);
 
+        // Create the agent with the tool
         CreateAgentOptions options = new CreateAgentOptions(config.getModelDeploymentName())
                 .setName(config.getAgentName())
                 .setInstructions(config.getInstructions())
@@ -189,7 +191,8 @@ public class AgentService {
         
         return agent;
     }
-    
+
+    // Get the output of the Python code runner tool
     private ToolOutput getPythonCodeRunnerOutput(RequiredToolCall toolCall){
          if (toolCall instanceof RequiredFunctionToolCall) {
                 RequiredFunctionToolCall functionToolCall = (RequiredFunctionToolCall) toolCall;
@@ -272,6 +275,7 @@ public class AgentService {
             if (attemptCount >= maxAttempts) {
                 throw new RuntimeException("Run did not complete within the expected time. Status: " + status);
             }
+            // Handle required actions (e.g., tool calls) - this is key to getting the response from the Python tool
             if (run.getStatus() == RunStatus.REQUIRES_ACTION
                     && run.getRequiredAction() instanceof SubmitToolOutputsAction) {
                     SubmitToolOutputsAction submitToolsOutputAction = (SubmitToolOutputsAction) (run.getRequiredAction());
